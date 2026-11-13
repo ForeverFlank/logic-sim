@@ -1,4 +1,5 @@
 use std::{
+    collections::BinaryHeap,
     ops::{Add, Sub},
     rc::Rc,
 };
@@ -26,6 +27,7 @@ impl Sub for Vec2i {
 enum LogicLevel {
     Low,
     High,
+    Z,
 }
 
 // #[derive(Clone, PartialEq, Eq)]
@@ -44,6 +46,12 @@ impl PackedLogicLevels {
     pub fn from_bit_slice(bit_slice: &BitSlice) -> Self {
         PackedLogicLevels {
             logic_levels: bit_slice.iter().map(|_| LogicLevel::Low).collect(),
+        }
+    }
+
+    pub fn set_all_z(&mut self) {
+        for l in &mut self.logic_levels {
+            *l = LogicLevel::Z
         }
     }
 
@@ -166,16 +174,35 @@ impl Node {
 struct Simulation {
     pub circuit: Box<Circuit>,
     pub nodes: Vec<Node>,
+    pub node_src_gate_indices: Vec<usize>,
+    pub input_node_indices: Vec<usize>,
     pub wire_states: Vec<PackedLogicLevels>,
 }
 
 impl Simulation {
     pub fn new(circuit: Circuit) -> Self {
-        let nodes = circuit
+        let (node_src_gate_indices, nodes): (Vec<usize>, Vec<Node>) = circuit
             .gates
             .iter()
-            .flat_map(|gate| gate.get_nodes())
-            .collect();
+            .enumerate()
+            .flat_map(|(idx, gate)| {
+                gate.get_nodes()
+                    .into_iter()
+                    .map(|node| (idx, node))
+                    .collect::<Vec<_>>()
+            })
+            .unzip();
+
+        let input_node_indices = node_src_gate_indices
+            .iter()
+            .enumerate()
+            .filter_map(
+                |(node_idx, gate_idx)| match circuit.gates[*gate_idx].gate_type {
+                    LogicGateType::Input { .. } => Some(node_idx),
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
 
         let wire_states = circuit
             .wires
@@ -186,11 +213,28 @@ impl Simulation {
         Simulation {
             circuit: circuit.into(),
             nodes,
+            node_src_gate_indices,
+            input_node_indices,
             wire_states,
         }
     }
 
-    pub fn tick(&self) -> Self {}
+    pub fn tick(&mut self) {
+        let mut pq = BinaryHeap::<(i32, usize)>::new();
+
+        for idx in &self.input_node_indices {
+            pq.push((-0, *idx));
+        }
+
+        for wire_state in &mut self.wire_states {
+            wire_state.set_all_z();
+        }
+
+        while !pq.is_empty() {
+            let (t, node_idx) = pq.pop().unwrap();
+            todo!()
+        }
+    }
 }
 
 fn main() {
@@ -233,5 +277,7 @@ fn main() {
     circuit.wires.push(w1);
     circuit.wires.push(w2);
 
-    let sim = Simulation::new(circuit);
+    let mut sim = Simulation::new(circuit);
+
+    sim.tick();
 }
