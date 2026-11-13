@@ -230,9 +230,18 @@ impl Simulation {
             wire_state.set_all_z();
         }
 
+        let mut curr_t = 0;
+
         while !pq.is_empty() {
-            let (t, node_idx) = pq.pop().unwrap();
-            todo!()
+            // update nodes & wires
+            while pq.peek().unwrap().0 == curr_t {
+                let node_idx = pq.pop().unwrap().1;
+                todo!()
+            }
+            // update gates
+            for gate in &self.circuit.gates {
+                // TODO
+            }
         }
     }
 }
