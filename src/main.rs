@@ -4,6 +4,10 @@ use std::{
     rc::Rc,
 };
 
+use crate::dsu::Dsu;
+
+mod dsu;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Vec2i(i32, i32);
 
@@ -143,12 +147,15 @@ impl LogicGateNode {
 
 struct Simulation {
     pub circuit: Box<Circuit>,
+
     // pub nodes: Vec<LogicGateNode>,
     pub node_src_gate_indices: Vec<usize>,
-    pub wire_src_sim_node_indices: Vec<usize>,
-    pub node_src_sim_node_indices: Vec<usize>,
     pub input_node_indices: Vec<usize>,
+
     pub sim_node_states: Vec<LogicLevels>,
+
+    pub wire_src_sim_node_state_indices: Vec<usize>,
+    pub node_src_sim_node_state_indices: Vec<usize>,
 }
 
 // struct SimulationNode {
@@ -191,11 +198,14 @@ impl Simulation {
             })
             .collect();
 
+        let dsu = Dsu::new();
+
         Simulation {
             circuit: circuit.into(),
             // nodes,
             node_src_gate_indices,
             input_node_indices,
+
             sim_node_states,
         }
     }
