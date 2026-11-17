@@ -30,58 +30,34 @@ enum LogicLevel {
     Z,
 }
 
+type LogicLevels = Vec<LogicLevel>;
+
 // #[derive(Clone, PartialEq, Eq)]
 // struct BitSlice {
 //     pub bits: Vec<i32>,
 // }
 
-type BitSlice = Vec<i32>;
-
-#[derive(PartialEq, Eq)]
-struct PackedLogicLevels {
-    pub logic_levels: Vec<LogicLevel>,
-}
-
-impl PackedLogicLevels {
-    pub fn from_bit_slice(bit_slice: &BitSlice) -> Self {
-        PackedLogicLevels {
-            logic_levels: bit_slice.iter().map(|_| LogicLevel::Low).collect(),
-        }
-    }
-
-    pub fn set_all_z(&mut self) {
-        for l in &mut self.logic_levels {
-            *l = LogicLevel::Z
-        }
-    }
-
-    pub fn get_state_at_bit(&self, bit_slice: BitSlice, bit: i32) -> Option<LogicLevel> {
-        let idx = bit_slice.iter().find(|b| **b == bit)?;
-        self.logic_levels.get(*idx as usize).copied()
-    }
-}
-
 #[derive(Clone)]
 enum LogicGateType {
     Circuit(Rc<Circuit>),
     Input {
-        bit_slice: BitSlice,
+        bit_width: i32,
     },
     Output {
-        bit_slice: BitSlice,
+        bit_width: i32,
     },
     And {
-        bit_slice: BitSlice,
+        bit_width: i32,
         num_inputs: i32,
         propagation_delay: i32,
     },
     Or {
-        bit_slice: BitSlice,
+        bit_width: i32,
         num_inputs: i32,
         propagation_delay: i32,
     },
     Not {
-        bit_slice: BitSlice,
+        bit_width: i32,
         propagation_delay: i32,
     },
 }
@@ -92,41 +68,37 @@ struct LogicGate {
 }
 
 impl LogicGate {
-    pub fn get_nodes(&self) -> Vec<Node> {
+    pub fn get_nodes(&self) -> Vec<LogicGateNode> {
         match self.gate_type {
             LogicGateType::Circuit(ref circuit) => todo!(),
 
-            LogicGateType::Input {
-                bit_slice: ref bits,
-            } => {
-                vec![Node::new(self.pos + Vec2i(1, 0), bits.clone())]
+            LogicGateType::Input { bit_width } => {
+                vec![LogicGateNode::new(self.pos + Vec2i(1, 0), bit_width)]
             }
 
-            LogicGateType::Output {
-                bit_slice: ref bits,
-            } => {
-                vec![Node::new(self.pos - Vec2i(1, 0), bits.clone())]
+            LogicGateType::Output { bit_width } => {
+                vec![LogicGateNode::new(self.pos - Vec2i(1, 0), bit_width)]
             }
 
             LogicGateType::And {
-                ref bit_slice,
+                bit_width,
                 num_inputs,
                 propagation_delay,
             } => todo!(),
 
             LogicGateType::Or {
-                ref bit_slice,
+                bit_width,
                 num_inputs,
                 propagation_delay,
             } => todo!(),
 
             LogicGateType::Not {
-                ref bit_slice,
+                bit_width,
                 propagation_delay,
             } => {
                 vec![
-                    Node::new(self.pos - Vec2i(1, 0), bit_slice.clone()),
-                    Node::new(self.pos + Vec2i(1, 0), bit_slice.clone()),
+                    LogicGateNode::new(self.pos - Vec2i(1, 0), bit_width),
+                    LogicGateNode::new(self.pos + Vec2i(1, 0), bit_width),
                 ]
             }
         }
@@ -137,7 +109,7 @@ impl LogicGate {
 struct Wire {
     pub pos1: Vec2i,
     pub pos2: Vec2i,
-    pub bit_slice: BitSlice,
+    pub bit_width: i32,
 }
 
 struct Circuit {
@@ -155,33 +127,37 @@ impl Circuit {
 }
 
 #[derive(PartialEq, Eq)]
-struct Node {
+struct LogicGateNode {
     pub pos: Vec2i,
-    pub value: PackedLogicLevels,
+    pub logic_levels: Vec<LogicLevel>,
 }
 
-impl Node {
-    pub fn new(pos: Vec2i, bits: BitSlice) -> Self {
-        Node {
+impl LogicGateNode {
+    pub fn new(pos: Vec2i, bit_width: i32) -> Self {
+        LogicGateNode {
             pos,
-            value: PackedLogicLevels {
-                logic_levels: bits.iter().map(|_| LogicLevel::Low).collect(),
-            },
+            logic_levels: [0..bit_width - 1].iter().map(|_| LogicLevel::Z).collect(),
         }
     }
 }
 
 struct Simulation {
     pub circuit: Box<Circuit>,
-    pub nodes: Vec<Node>,
+    // pub nodes: Vec<LogicGateNode>,
     pub node_src_gate_indices: Vec<usize>,
+    pub wire_src_sim_node_indices: Vec<usize>,
+    pub node_src_sim_node_indices: Vec<usize>,
     pub input_node_indices: Vec<usize>,
-    pub wire_states: Vec<PackedLogicLevels>,
+    pub sim_node_states: Vec<LogicLevels>,
 }
+
+// struct SimulationNode {
+//     pub state: LogicLevels,
+// }
 
 impl Simulation {
     pub fn new(circuit: Circuit) -> Self {
-        let (node_src_gate_indices, nodes): (Vec<usize>, Vec<Node>) = circuit
+        let (node_src_gate_indices, nodes): (Vec<usize>, Vec<LogicGateNode>) = circuit
             .gates
             .iter()
             .enumerate()
@@ -204,18 +180,23 @@ impl Simulation {
             )
             .collect::<Vec<_>>();
 
-        let wire_states = circuit
+        let sim_node_states = circuit
             .wires
             .iter()
-            .map(|wire| PackedLogicLevels::from_bit_slice(&wire.bit_slice))
+            .map(|wire| {
+                [0..wire.bit_width - 1]
+                    .iter()
+                    .map(|_| LogicLevel::Z)
+                    .collect()
+            })
             .collect();
 
         Simulation {
             circuit: circuit.into(),
-            nodes,
+            // nodes,
             node_src_gate_indices,
             input_node_indices,
-            wire_states,
+            sim_node_states,
         }
     }
 
@@ -226,8 +207,10 @@ impl Simulation {
             pq.push((-0, *idx));
         }
 
-        for wire_state in &mut self.wire_states {
-            wire_state.set_all_z();
+        for node_state in &mut self.sim_node_states {
+            for level in node_state {
+                *level = LogicLevel::Z;
+            }
         }
 
         let mut curr_t = 0;
@@ -250,33 +233,33 @@ fn main() {
     let mut circuit = Circuit::new();
 
     let input = LogicGate {
-        gate_type: LogicGateType::Input { bit_slice: vec![0] },
+        gate_type: LogicGateType::Input { bit_width: 1 },
         pos: Vec2i(0, 0),
     };
 
     let not = LogicGate {
         gate_type: LogicGateType::Not {
-            bit_slice: vec![0],
+            bit_width: 1,
             propagation_delay: 1,
         },
         pos: Vec2i(5, 0),
     };
 
     let output = LogicGate {
-        gate_type: LogicGateType::Output { bit_slice: vec![0] },
+        gate_type: LogicGateType::Output { bit_width: 1 },
         pos: Vec2i(10, 0),
     };
 
     let w1 = Wire {
         pos1: Vec2i(1, 0),
         pos2: Vec2i(4, 0),
-        bit_slice: vec![0],
+        bit_width: 1,
     };
 
     let w2 = Wire {
         pos1: Vec2i(6, 0),
         pos2: Vec2i(9, 0),
-        bit_slice: vec![0],
+        bit_width: 1,
     };
 
     circuit.gates.push(input);
