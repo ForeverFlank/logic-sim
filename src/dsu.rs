@@ -1,9 +1,5 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    hash::{Hash, Hasher},
-};
-
-use itertools::Itertools;
+use std::collections::HashMap;
+use std::hash::Hash;
 
 pub struct Dsu<T>
 where
@@ -23,15 +19,15 @@ where
     }
 
     pub fn make_set(&mut self, value: T) {
-        if (!self.parents.contains_key(&value)) {
+        if !self.parents.contains_key(&value) {
             self.parents.insert(value, value);
         }
     }
 
     pub fn find(&mut self, value: T) -> T {
-        if (*self.parents.get(&value).unwrap() != value) {
-            self.parents
-                .insert(value, self.find(*self.parents.get(&value).unwrap()));
+        if *self.parents.get(&value).unwrap() != value {
+            let root = self.find(*self.parents.get(&value).unwrap());
+            self.parents.insert(value, root);
         }
 
         *self.parents.get(&value).unwrap()
@@ -41,7 +37,7 @@ where
         let ra = self.find(a);
         let rb = self.find(b);
 
-        if (ra != rb) {
+        if ra != rb {
             self.parents.insert(rb, ra);
         }
     }

@@ -8,6 +8,8 @@ use crate::dsu::Dsu;
 
 mod dsu;
 
+// --- Vec2i
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Vec2i(i32, i32);
 
@@ -27,6 +29,8 @@ impl Sub for Vec2i {
     }
 }
 
+// ---
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LogicLevel {
     Low,
@@ -36,10 +40,7 @@ enum LogicLevel {
 
 type LogicLevels = Vec<LogicLevel>;
 
-// #[derive(Clone, PartialEq, Eq)]
-// struct BitSlice {
-//     pub bits: Vec<i32>,
-// }
+// --- logic gates
 
 #[derive(Clone)]
 enum LogicGateType {
@@ -109,6 +110,8 @@ impl LogicGate {
     }
 }
 
+// ---
+
 #[derive(PartialEq, Eq)]
 struct Wire {
     pub pos1: Vec2i,
@@ -154,6 +157,8 @@ impl Node {
     }
 }
 
+// --- simulation
+
 struct Simulation {
     pub circuit: Box<Circuit>,
 
@@ -166,10 +171,6 @@ struct Simulation {
     pub wire_src_sim_node_state_indices: Vec<usize>,
     pub node_src_sim_node_state_indices: Vec<usize>,
 }
-
-// struct SimulationNode {
-//     pub state: LogicLevels,
-// }
 
 impl Simulation {
     pub fn new(circuit: Circuit) -> Self {
@@ -198,6 +199,7 @@ impl Simulation {
             .unzip();
 
         let all_nodes = [gate_nodes, wire_nodes].concat();
+        let num_nodes = all_nodes.len();
 
         let input_node_indices = node_src_gate_indices
             .iter()
@@ -221,7 +223,19 @@ impl Simulation {
             })
             .collect();
 
-        let mut dsu = Dsu::<i32>::new();
+        let mut dsu = Dsu::<usize>::new();
+
+        for i in 0..num_nodes - 1 {
+            for j in 0..i {
+                if all_nodes[i].pos == all_nodes[j].pos {
+                    dsu.union(i, j);
+                }
+            }
+        }
+
+        // for wire in wires
+        // dsu.union the two nodes of wire
+
         let mut counter = 0;
         let mut id_to_gate_node = HashMap::new();
         let mut id_to_wire = HashMap::new();
