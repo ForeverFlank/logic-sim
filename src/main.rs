@@ -1,5 +1,5 @@
 use std::{
-    collections::BinaryHeap,
+    collections::{BinaryHeap, HashMap},
     ops::{Add, Sub},
     rc::Rc,
 };
@@ -72,16 +72,16 @@ struct LogicGate {
 }
 
 impl LogicGate {
-    pub fn get_nodes(&self) -> Vec<LogicGateNode> {
+    pub fn get_nodes(&self) -> Vec<Node> {
         match self.gate_type {
             LogicGateType::Circuit(ref circuit) => todo!(),
 
             LogicGateType::Input { bit_width } => {
-                vec![LogicGateNode::new(self.pos + Vec2i(1, 0), bit_width)]
+                vec![Node::new(self.pos + Vec2i(1, 0), bit_width)]
             }
 
             LogicGateType::Output { bit_width } => {
-                vec![LogicGateNode::new(self.pos - Vec2i(1, 0), bit_width)]
+                vec![Node::new(self.pos - Vec2i(1, 0), bit_width)]
             }
 
             LogicGateType::And {
@@ -101,8 +101,8 @@ impl LogicGate {
                 propagation_delay,
             } => {
                 vec![
-                    LogicGateNode::new(self.pos - Vec2i(1, 0), bit_width),
-                    LogicGateNode::new(self.pos + Vec2i(1, 0), bit_width),
+                    Node::new(self.pos - Vec2i(1, 0), bit_width),
+                    Node::new(self.pos + Vec2i(1, 0), bit_width),
                 ]
             }
         }
@@ -114,6 +114,15 @@ struct Wire {
     pub pos1: Vec2i,
     pub pos2: Vec2i,
     pub bit_width: i32,
+}
+
+impl Wire {
+    pub fn get_nodes(&self) -> Vec<Node> {
+        vec![
+            Node::new(self.pos1, self.bit_width),
+            Node::new(self.pos2, self.bit_width),
+        ]
+    }
 }
 
 struct Circuit {
@@ -130,15 +139,15 @@ impl Circuit {
     }
 }
 
-#[derive(PartialEq, Eq)]
-struct LogicGateNode {
+#[derive(PartialEq, Eq, Clone)]
+struct Node {
     pub pos: Vec2i,
     pub logic_levels: Vec<LogicLevel>,
 }
 
-impl LogicGateNode {
+impl Node {
     pub fn new(pos: Vec2i, bit_width: i32) -> Self {
-        LogicGateNode {
+        Node {
             pos,
             logic_levels: [0..bit_width - 1].iter().map(|_| LogicLevel::Z).collect(),
         }
@@ -164,7 +173,7 @@ struct Simulation {
 
 impl Simulation {
     pub fn new(circuit: Circuit) -> Self {
-        let (node_src_gate_indices, nodes): (Vec<usize>, Vec<LogicGateNode>) = circuit
+        let (node_src_gate_indices, gate_nodes): (Vec<usize>, Vec<Node>) = circuit
             .gates
             .iter()
             .enumerate()
@@ -175,6 +184,20 @@ impl Simulation {
                     .collect::<Vec<_>>()
             })
             .unzip();
+
+        let (node_src_wire_indices, wire_nodes): (Vec<usize>, Vec<Node>) = circuit
+            .wires
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, wire)| {
+                wire.get_nodes()
+                    .into_iter()
+                    .map(|node| (idx, node))
+                    .collect::<Vec<_>>()
+            })
+            .unzip();
+
+        let all_nodes = [gate_nodes, wire_nodes].concat();
 
         let input_node_indices = node_src_gate_indices
             .iter()
@@ -198,7 +221,28 @@ impl Simulation {
             })
             .collect();
 
-        let dsu = Dsu::new();
+        let mut dsu = Dsu::<i32>::new();
+        let mut counter = 0;
+        let mut id_to_gate_node = HashMap::new();
+        let mut id_to_wire = HashMap::new();
+
+        for gate_node in gate_nodes {
+            let id = counter;
+            counter += 1;
+
+            dsu.make_set(id);
+            id_to_gate_node.insert(id, gate_node);
+        }
+
+        for wire in circuit.wires {
+            let id = counter;
+            counter += 1;
+
+            dsu.make_set(id);
+            id_to_wire.insert(id, wire);
+        }
+
+        for wire in circuit.wires {}
 
         Simulation {
             circuit: circuit.into(),
