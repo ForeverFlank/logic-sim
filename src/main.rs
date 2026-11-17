@@ -1,3 +1,4 @@
+use core::num;
 use std::{
     collections::{BinaryHeap, HashMap},
     ops::{Add, Sub},
@@ -48,9 +49,11 @@ enum LogicGateType {
     Circuit(Rc<Circuit>),
     Input {
         bit_width: i32,
+        logic_levels: LogicLevels,
     },
     Output {
         bit_width: i32,
+        logic_levels: LogicLevels,
     },
     And {
         bit_width: i32,
@@ -88,11 +91,11 @@ impl LogicGate {
         match self.gate_type {
             LogicGateType::Circuit(ref _circuit) => todo!(),
 
-            LogicGateType::Input { bit_width } => {
+            LogicGateType::Input { bit_width, .. } => {
                 vec![Node::new(self.pos + Vec2i(1, 0), bit_width)]
             }
 
-            LogicGateType::Output { bit_width } => {
+            LogicGateType::Output { bit_width, .. } => {
                 vec![Node::new(self.pos - Vec2i(1, 0), bit_width)]
             }
 
@@ -106,6 +109,30 @@ impl LogicGate {
                     Node::new(self.pos + Vec2i(1, 0), bit_width),
                 ]
             }
+        }
+    }
+
+    pub fn tick(&mut self, nodes: &[SimulationNode], pq: &mut SimulationQueue) {
+        match self.gate_type {
+            LogicGateType::Circuit(ref _circuit) => todo!(),
+
+            LogicGateType::Input {
+                ref logic_levels, ..
+            } => nodes.get_mut(0).unwrap().logic_levels = logic_levels.to_vec(),
+
+            LogicGateType::Output {
+                ref mut logic_levels,
+                ..
+            } => *logic_levels = nodes.get(0).unwrap().logic_levels.clone(),
+
+            LogicGateType::And { .. } => todo!(),
+
+            LogicGateType::Or { .. } => todo!(),
+
+            LogicGateType::Not {
+                bit_width,
+                propagation_delay,
+            } => todo!(),
         }
     }
 }
@@ -176,11 +203,37 @@ impl SimulationNode {
     }
 }
 
+type SimulationQueue = BinaryHeap<QueueEvent>;
+
+#[derive(PartialEq, Eq, Clone)]
+struct QueueEvent(i32, QueueEventType);
+
+impl PartialOrd for QueueEvent {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(other.0.cmp(&self.0))
+    }
+}
+
+impl Ord for QueueEvent {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other.0.cmp(&self.0)
+    }
+}
+
+#[derive(PartialEq, Eq, Clone)]
+enum QueueEventType {
+    UpdateGate(usize),
+    UpdateNode(usize, LogicLevels),
+}
+
 struct Simulation<'a> {
     pub circuit: &'a Circuit,
 
     pub sim_nodes: Vec<SimulationNode>,
-    pub input_sim_node_ids: Vec<usize>,
+    // pub input_sim_node_ids: Vec<usize>,
+    pub input_gate_indices: Vec<usize>,
+
+    pub nodes_by_gate_indices: Vec<Vec<usize>>,
 
     pub node_sources: Vec<NodeSource<'a>>,
 }
@@ -193,12 +246,14 @@ impl<'a> Simulation<'a> {
         let mut dsu = Dsu::<usize>::new();
         let mut id_counter = 0;
         let mut all_nodes = Vec::<Node>::new();
-        let mut node_sources = Vec::new();
-        let mut input_node_ids = Vec::new();
+        let mut node_sources = Vec::new(); // TODO separate vector; one for gates, another for wires
+        let mut nodes_by_gate_indices = Vec::new();
+        let mut input_gate_indices = Vec::new();
 
         // create nodes from logic gates
-        for gate in gates {
+        for (gate_idx, gate) in gates.iter().enumerate() {
             let nodes = gate.create_nodes();
+            let mut ids = Vec::new();
 
             for node in nodes {
                 let id = id_counter;
@@ -208,9 +263,13 @@ impl<'a> Simulation<'a> {
                 all_nodes.push(node);
                 node_sources.push(NodeSource::LogicGate(&gate));
 
-                if gate.gate_type.is_start() {
-                    input_node_ids.push(id);
-                }
+                ids.push(id);
+            }
+
+            nodes_by_gate_indices.push(ids);
+
+            if gate.gate_type.is_start() {
+                input_gate_indices.push(gate_idx);
             }
         }
 
@@ -246,7 +305,7 @@ impl<'a> Simulation<'a> {
         }
 
         // union
-        let input_sim_node_ids = input_node_ids.iter().map(|id| dsu.find(*id)).collect();
+        // let input_sim_node_ids = input_node_ids.iter().map(|id| dsu.find(*id)).collect();
 
         // create simulation nodes
         let sim_nodes = all_nodes
@@ -258,35 +317,61 @@ impl<'a> Simulation<'a> {
         Simulation {
             circuit,
             sim_nodes,
-            input_sim_node_ids,
+            input_gate_indices,
+            nodes_by_gate_indices,
+            // input_sim_node_ids,
             node_sources,
         }
     }
 
     pub fn tick(&mut self) {
-        let mut pq = BinaryHeap::<(i32, usize)>::new();
+        // a priority queue of (subtick, update event)
+        let mut pq = SimulationQueue::new();
 
-        for id in &self.input_sim_node_ids {
-            pq.push((0, *id));
+        // push all input gates into the queue
+        for gate_idx in &self.input_gate_indices {
+            pq.push(QueueEvent(0, QueueEventType::UpdateGate(*gate_idx)));
         }
 
-        for sim_node in &mut self.sim_nodes {
-            for level in &mut sim_node.logic_levels {
-                *level = LogicLevel::Z;
-            }
-        }
+        // for sim_node in &mut self.sim_nodes {
+        //     for level in &mut sim_node.logic_levels {
+        //         *level = LogicLevel::Z;
+        //     }
+        // }
 
-        let mut curr_t = 0;
-
+        // loop while there is something in the queue to proceed
         while !pq.is_empty() {
-            // update nodes & wires
-            while pq.peek().unwrap().0 == curr_t {
-                let node_idx = pq.pop().unwrap().1;
-                todo!()
+            let curr_t = pq.peek().unwrap().0;
+
+            // retrieve all to-be-processed queue items
+            let mut to_update = Vec::new();
+
+            while pq.peek().is_some_and(|item| item.0 == curr_t) {
+                to_update.push(pq.pop().unwrap().1);
             }
-            // update gates
-            for gate in &self.circuit.gates {
-                // TODO
+
+            // update all logic gates within the current subtick
+            while pq.peek().unwrap().0 == curr_t {
+                let item = pq.pop().unwrap().1;
+
+                match item {
+                    QueueEventType::UpdateGate(gate_idx) => {
+                        let gate = self.circuit.gates.get(gate_idx).unwrap();
+
+                        // TODO obtain sim nodes from gate idx
+
+                        // let nodes = self.node_sources.get(gate_idx).unwrap();
+
+                        gate.tick(nodes, &mut pq);
+
+                        // gate.process(nodes) -- update the nodes, e.g. change outputs given inputs
+                        // then find what nodes have changed its states
+                        // then find what gates got affected by said changed nodes
+                        // then add all of those gates to the heap
+                    }
+
+                    QueueEventType::UpdateNode(node_idx) => todo!(),
+                }
             }
         }
     }
