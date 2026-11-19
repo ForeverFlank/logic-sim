@@ -1,7 +1,7 @@
 use core::num;
 use std::{
     collections::{BinaryHeap, HashMap},
-    ops::{Add, Sub},
+    ops::{Add, Not, Sub},
     rc::Rc,
 };
 
@@ -32,7 +32,7 @@ impl Sub for Vec2i {
 
 // ---
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LogicLevel {
     Invalid,
     Low,
@@ -40,7 +40,28 @@ enum LogicLevel {
     Z,
 }
 
+impl Not for LogicLevel {
+    type Output = LogicLevel;
+
+    fn not(self) -> Self::Output {
+        match self {
+            LogicLevel::Invalid => LogicLevel::Invalid,
+            LogicLevel::Low => LogicLevel::High,
+            LogicLevel::High => LogicLevel::Low,
+            LogicLevel::Z => LogicLevel::Invalid,
+        }
+    }
+}
+
 type LogicLevels = Vec<LogicLevel>;
+
+impl Not for LogicLevels {
+    type Output = LogicLevels;
+
+    fn not(self) -> Self::Output {
+        self.iter().map(|x| !*x).collect()
+    }
+}
 
 // --- logic gates
 
@@ -92,11 +113,11 @@ impl LogicGate {
             LogicGateType::Circuit(ref _circuit) => todo!(),
 
             LogicGateType::Input { bit_width, .. } => {
-                vec![Node::new(self.pos + Vec2i(1, 0), bit_width)]
+                vec![Node::new_out(self.pos + Vec2i(1, 0), bit_width)]
             }
 
             LogicGateType::Output { bit_width, .. } => {
-                vec![Node::new(self.pos - Vec2i(1, 0), bit_width)]
+                vec![Node::new_in(self.pos - Vec2i(1, 0), bit_width)]
             }
 
             LogicGateType::And { .. } => todo!(),
@@ -105,25 +126,34 @@ impl LogicGate {
 
             LogicGateType::Not { bit_width, .. } => {
                 vec![
-                    Node::new(self.pos - Vec2i(1, 0), bit_width),
-                    Node::new(self.pos + Vec2i(1, 0), bit_width),
+                    Node::new_in(self.pos - Vec2i(1, 0), bit_width),
+                    Node::new_out(self.pos + Vec2i(1, 0), bit_width),
                 ]
             }
         }
     }
 
-    pub fn tick(&mut self, nodes: &[SimulationNode], pq: &mut SimulationQueue) {
-        match self.gate_type {
-            LogicGateType::Circuit(ref _circuit) => todo!(),
+    pub fn tick(
+        &self,
+        node_idxs: &[usize],
+        sim_nodes: &[SimulationNode],
+        pq: &mut SimulationQueue,
+        subtick: i32,
+    ) {
+        match &self.gate_type {
+            LogicGateType::Circuit(_circuit) => todo!(),
 
-            LogicGateType::Input {
-                ref logic_levels, ..
-            } => nodes.get_mut(0).unwrap().logic_levels = logic_levels.to_vec(),
-
-            LogicGateType::Output {
-                ref mut logic_levels,
-                ..
-            } => *logic_levels = nodes.get(0).unwrap().logic_levels.clone(),
+            LogicGateType::Input { logic_levels, .. } => {
+                pq.push(QueueEvent(
+                    subtick,
+                    QueueEventType::UpdateNode(node_idxs[0], logic_levels.to_vec()),
+                ));
+            }
+            // nodes.get_mut(0).unwrap().logic_levels = logic_levels.to_vec(),
+            LogicGateType::Output { logic_levels, .. } => {
+                // TODO separate state from LogicGate
+                // *logic_levels = sim_nodes[node_idxs[0]].logic_levels.clone()
+            }
 
             LogicGateType::And { .. } => todo!(),
 
@@ -132,7 +162,12 @@ impl LogicGate {
             LogicGateType::Not {
                 bit_width,
                 propagation_delay,
-            } => todo!(),
+            } => {
+                pq.push(QueueEvent(
+                    subtick + propagation_delay,
+                    QueueEventType::UpdateNode(node_idxs[1], !sim_nodes[node_idxs[0]].logic_levels),
+                ));
+            }
         }
     }
 }
@@ -149,8 +184,8 @@ struct Wire {
 impl Wire {
     pub fn create_nodes(&self) -> Vec<Node> {
         vec![
-            Node::new(self.pos1, self.bit_width),
-            Node::new(self.pos2, self.bit_width),
+            Node::new_in_out(self.pos1, self.bit_width),
+            Node::new_in_out(self.pos2, self.bit_width),
         ]
     }
 }
@@ -169,16 +204,44 @@ impl Circuit {
     }
 }
 
+#[derive(PartialEq, Eq, Clone)]
+enum NodeType {
+    In,
+    Out,
+    InOut,
+}
+
 /// A connection node of logic gates and wires.
 #[derive(PartialEq, Eq, Clone)]
 struct Node {
+    pub node_type: NodeType,
     pub pos: Vec2i,
     pub bit_width: i32,
 }
 
 impl Node {
-    pub fn new(pos: Vec2i, bit_width: i32) -> Self {
-        Node { pos, bit_width }
+    pub fn new_in(pos: Vec2i, bit_width: i32) -> Self {
+        Node {
+            node_type: NodeType::In,
+            pos,
+            bit_width,
+        }
+    }
+
+    pub fn new_out(pos: Vec2i, bit_width: i32) -> Self {
+        Node {
+            node_type: NodeType::Out,
+            pos,
+            bit_width,
+        }
+    }
+
+    pub fn new_in_out(pos: Vec2i, bit_width: i32) -> Self {
+        Node {
+            node_type: NodeType::InOut,
+            pos,
+            bit_width,
+        }
     }
 }
 
@@ -198,14 +261,14 @@ struct SimulationNode {
 impl SimulationNode {
     pub fn new(bit_width: i32) -> Self {
         SimulationNode {
-            logic_levels: (0..bit_width - 1).map(|_| LogicLevel::Invalid).collect(),
+            logic_levels: (0..bit_width).map(|_| LogicLevel::Invalid).collect(),
         }
     }
 }
 
 type SimulationQueue = BinaryHeap<QueueEvent>;
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 struct QueueEvent(i32, QueueEventType);
 
 impl PartialOrd for QueueEvent {
@@ -220,7 +283,7 @@ impl Ord for QueueEvent {
     }
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 enum QueueEventType {
     UpdateGate(usize),
     UpdateNode(usize, LogicLevels),
@@ -231,9 +294,10 @@ struct Simulation<'a> {
 
     pub sim_nodes: Vec<SimulationNode>,
     // pub input_sim_node_ids: Vec<usize>,
-    pub input_gate_indices: Vec<usize>,
+    pub input_gate_idxs: Vec<usize>,
 
-    pub nodes_by_gate_indices: Vec<Vec<usize>>,
+    pub node_idxs_by_gate_idx: Vec<Vec<usize>>,
+    pub gate_idxs_by_node_idx: Vec<usize>,
 
     pub node_sources: Vec<NodeSource<'a>>,
 }
@@ -244,11 +308,15 @@ impl<'a> Simulation<'a> {
         let wires = &circuit.wires;
 
         let mut dsu = Dsu::<usize>::new();
-        let mut id_counter = 0;
+        let mut node_idx_counter = 0;
         let mut all_nodes = Vec::<Node>::new();
-        let mut node_sources = Vec::new(); // TODO separate vector; one for gates, another for wires
-        let mut nodes_by_gate_indices = Vec::new();
-        let mut input_gate_indices = Vec::new();
+
+        let mut node_sources = Vec::new();
+
+        let mut node_idxs_by_gate_idx = Vec::new();
+        let mut gate_idxs_by_node_idx = Vec::new();
+
+        let mut input_gate_idxs = Vec::new();
 
         // create nodes from logic gates
         for (gate_idx, gate) in gates.iter().enumerate() {
@@ -256,56 +324,55 @@ impl<'a> Simulation<'a> {
             let mut ids = Vec::new();
 
             for node in nodes {
-                let id = id_counter;
-                id_counter += 1;
+                let node_idx = node_idx_counter;
+                node_idx_counter += 1;
 
-                dsu.make_set(id);
+                dsu.make_set(node_idx);
                 all_nodes.push(node);
                 node_sources.push(NodeSource::LogicGate(&gate));
 
-                ids.push(id);
+                gate_idxs_by_node_idx.push(gate_idx);
+
+                ids.push(node_idx);
             }
 
-            nodes_by_gate_indices.push(ids);
+            node_idxs_by_gate_idx.push(ids);
 
             if gate.gate_type.is_start() {
-                input_gate_indices.push(gate_idx);
+                input_gate_idxs.push(gate_idx);
             }
         }
 
         // create nodes from wires
         for wire in wires {
             let nodes = wire.create_nodes();
-            let mut ids = Vec::new();
+            let mut node_idxs = Vec::new();
 
             for node in nodes {
-                let id = id_counter;
-                id_counter += 1;
+                let node_idx = node_idx_counter;
+                node_idx_counter += 1;
 
-                dsu.make_set(id);
+                dsu.make_set(node_idx);
                 all_nodes.push(node);
                 node_sources.push(NodeSource::Wire(&wire));
 
-                ids.push(id);
+                node_idxs.push(node_idx);
             }
 
             // connect nodes within the same wire
-            for id in &ids[1..] {
-                dsu.union(ids[0], *id);
+            for i in &node_idxs[1..] {
+                dsu.union(node_idxs[0], *i);
             }
         }
 
         // connect two nodes together if they share the same position
-        for i in 0..all_nodes.len() - 1 {
+        for i in 0..all_nodes.len() {
             for j in 0..i {
                 if all_nodes[i].pos == all_nodes[j].pos {
                     dsu.union(i, j);
                 }
             }
         }
-
-        // union
-        // let input_sim_node_ids = input_node_ids.iter().map(|id| dsu.find(*id)).collect();
 
         // create simulation nodes
         let sim_nodes = all_nodes
@@ -317,8 +384,9 @@ impl<'a> Simulation<'a> {
         Simulation {
             circuit,
             sim_nodes,
-            input_gate_indices,
-            nodes_by_gate_indices,
+            input_gate_idxs,
+            node_idxs_by_gate_idx,
+            gate_idxs_by_node_idx,
             // input_sim_node_ids,
             node_sources,
         }
@@ -329,7 +397,7 @@ impl<'a> Simulation<'a> {
         let mut pq = SimulationQueue::new();
 
         // push all input gates into the queue
-        for gate_idx in &self.input_gate_indices {
+        for gate_idx in &self.input_gate_idxs {
             pq.push(QueueEvent(0, QueueEventType::UpdateGate(*gate_idx)));
         }
 
@@ -341,28 +409,28 @@ impl<'a> Simulation<'a> {
 
         // loop while there is something in the queue to proceed
         while !pq.is_empty() {
-            let curr_t = pq.peek().unwrap().0;
+            let curr_subtick = pq.peek().unwrap().0;
 
             // retrieve all to-be-processed queue items
             let mut to_update = Vec::new();
 
-            while pq.peek().is_some_and(|item| item.0 == curr_t) {
+            while pq.peek().is_some_and(|item| item.0 == curr_subtick) {
                 to_update.push(pq.pop().unwrap().1);
             }
 
-            // update all logic gates within the current subtick
-            while pq.peek().unwrap().0 == curr_t {
-                let item = pq.pop().unwrap().1;
+            println!("subtick {}", curr_subtick);
+            for item in &to_update {
+                println!("{:?}", item);
+            }
 
+            // update all logic gates within the current subtick
+            for item in to_update {
                 match item {
                     QueueEventType::UpdateGate(gate_idx) => {
-                        let gate = self.circuit.gates.get(gate_idx).unwrap();
+                        let gate = &self.circuit.gates[gate_idx];
 
-                        // TODO obtain sim nodes from gate idx
-
-                        // let nodes = self.node_sources.get(gate_idx).unwrap();
-
-                        gate.tick(nodes, &mut pq);
+                        let node_idxs = &self.node_idxs_by_gate_idx[gate_idx];
+                        gate.tick(node_idxs, &self.sim_nodes, &mut pq, curr_subtick);
 
                         // gate.process(nodes) -- update the nodes, e.g. change outputs given inputs
                         // then find what nodes have changed its states
@@ -370,7 +438,9 @@ impl<'a> Simulation<'a> {
                         // then add all of those gates to the heap
                     }
 
-                    QueueEventType::UpdateNode(node_idx) => todo!(),
+                    QueueEventType::UpdateNode(node_idx, logic_levels) => {
+                        self.sim_nodes[node_idx].logic_levels = logic_levels
+                    }
                 }
             }
         }
@@ -381,7 +451,10 @@ fn main() {
     let mut circuit = Circuit::new();
 
     let input = LogicGate {
-        gate_type: LogicGateType::Input { bit_width: 1 },
+        gate_type: LogicGateType::Input {
+            bit_width: 1,
+            logic_levels: vec![LogicLevel::High],
+        },
         pos: Vec2i(0, 0),
     };
 
@@ -394,7 +467,10 @@ fn main() {
     };
 
     let output = LogicGate {
-        gate_type: LogicGateType::Output { bit_width: 1 },
+        gate_type: LogicGateType::Output {
+            bit_width: 1,
+            logic_levels: vec![LogicLevel::Invalid],
+        },
         pos: Vec2i(10, 0),
     };
 
@@ -418,6 +494,16 @@ fn main() {
     circuit.wires.push(w2);
 
     let mut sim = Simulation::new(&circuit);
+
+    println!("gate idx -> [node idx]");
+    for i in 0..sim.node_idxs_by_gate_idx.len() {
+        println!("{} -> {:?}", i, sim.node_idxs_by_gate_idx[i]);
+    }
+
+    println!("node idx -> gate idx");
+    for i in 0..sim.gate_idxs_by_node_idx.len() {
+        println!("{} -> {}", i, sim.gate_idxs_by_node_idx[i]);
+    }
 
     sim.tick();
 }
