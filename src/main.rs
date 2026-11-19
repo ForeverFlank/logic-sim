@@ -1,7 +1,7 @@
 use core::num;
 use std::{
-    collections::{BinaryHeap, HashMap},
-    ops::{Add, Not, Sub},
+    collections::{BinaryHeap, HashMap, HashSet},
+    ops::{Add, Index, Not, Sub},
     rc::Rc,
 };
 
@@ -53,13 +53,27 @@ impl Not for LogicLevel {
     }
 }
 
-type LogicLevels = Vec<LogicLevel>;
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LogicLevels(Vec<LogicLevel>);
+
+impl LogicLevels {
+    fn filled(bit_width: i32, logic_level: LogicLevel) -> Self {
+        LogicLevels((0..bit_width).map(|_| logic_level).collect())
+    }
+}
+
+impl Index<usize> for LogicLevels {
+    type Output = LogicLevel;
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
 
 impl Not for LogicLevels {
     type Output = LogicLevels;
 
     fn not(self) -> Self::Output {
-        self.iter().map(|x| !*x).collect()
+        LogicLevels(self.0.iter().map(|x| !*x).collect())
     }
 }
 
@@ -146,7 +160,7 @@ impl LogicGate {
             LogicGateType::Input { logic_levels, .. } => {
                 pq.push(QueueEvent(
                     subtick,
-                    QueueEventType::UpdateNode(node_idxs[0], logic_levels.to_vec()),
+                    QueueEventType::UpdateNode(node_idxs[0], logic_levels.clone()),
                 ));
             }
             // nodes.get_mut(0).unwrap().logic_levels = logic_levels.to_vec(),
@@ -165,7 +179,10 @@ impl LogicGate {
             } => {
                 pq.push(QueueEvent(
                     subtick + propagation_delay,
-                    QueueEventType::UpdateNode(node_idxs[1], !sim_nodes[node_idxs[0]].logic_levels),
+                    QueueEventType::UpdateNode(
+                        node_idxs[1],
+                        !sim_nodes[node_idxs[0]].logic_levels.clone(),
+                    ),
                 ));
             }
         }
@@ -261,7 +278,7 @@ struct SimulationNode {
 impl SimulationNode {
     pub fn new(bit_width: i32) -> Self {
         SimulationNode {
-            logic_levels: (0..bit_width).map(|_| LogicLevel::Invalid).collect(),
+            logic_levels: LogicLevels::filled(bit_width, LogicLevel::Invalid),
         }
     }
 }
@@ -314,7 +331,7 @@ impl<'a> Simulation<'a> {
         let mut node_sources = Vec::new();
 
         let mut node_idxs_by_gate_idx = Vec::new();
-        let mut gate_idxs_by_node_idx = Vec::new();
+        let mut gate_idxs_by_node_idx = HashMap::new();
 
         let mut input_gate_idxs = Vec::new();
 
@@ -331,7 +348,7 @@ impl<'a> Simulation<'a> {
                 all_nodes.push(node);
                 node_sources.push(NodeSource::LogicGate(&gate));
 
-                gate_idxs_by_node_idx.push(gate_idx);
+                gate_idxs_by_node_idx.insert(node_idx, gate_idx);
 
                 ids.push(node_idx);
             }
@@ -374,22 +391,45 @@ impl<'a> Simulation<'a> {
             }
         }
 
+        let mut sim_node_idxs_by_root = HashMap::new();
+        let mut sim_node_idxs_by_node_idx = Vec::new();
+        let mut sim_node_idx_counter = 0;
+
+        for node_idx in 0..node_idx_counter {
+            let root = dsu.find(node_idx);
+
+            let sim_node_idx = sim_node_idxs_by_root.entry(root).or_insert_with(|| {
+                let sim_node_idx = sim_node_idx_counter;
+                sim_node_idx_counter += 1;
+                sim_node_idx
+            });
+
+            sim_node_idxs_by_node_idx.push(sim_node_idx.clone());
+        }
+
+        println!("node idx -> sim node idx");
+        for i in 0..node_idx_counter {
+            println!("{} -> {}", i, sim_node_idxs_by_node_idx[i]);
+        }
+
         // create simulation nodes
         let sim_nodes = all_nodes
             .iter()
             .map(|node| SimulationNode::new(node.bit_width))
-            .collect();
+            .collect::<Vec<_>>();
+
+        todo!();
 
         // create the struct
-        Simulation {
-            circuit,
-            sim_nodes,
-            input_gate_idxs,
-            node_idxs_by_gate_idx,
-            gate_idxs_by_node_idx,
-            // input_sim_node_ids,
-            node_sources,
-        }
+        // Simulation {
+        //     circuit,
+        //     sim_nodes,
+        //     input_gate_idxs,
+        //     node_idxs_by_gate_idx,
+        //     gate_idxs_by_node_idx,
+        //     // input_sim_node_ids,
+        //     node_sources,
+        // }
     }
 
     pub fn tick(&mut self) {
@@ -408,7 +448,12 @@ impl<'a> Simulation<'a> {
         // }
 
         // loop while there is something in the queue to proceed
-        while !pq.is_empty() {
+        const MAX_ITERS: i32 = 10;
+        let mut iter = 0;
+
+        while !pq.is_empty() && iter < MAX_ITERS {
+            iter += 1;
+
             let curr_subtick = pq.peek().unwrap().0;
 
             // retrieve all to-be-processed queue items
@@ -439,7 +484,14 @@ impl<'a> Simulation<'a> {
                     }
 
                     QueueEventType::UpdateNode(node_idx, logic_levels) => {
-                        self.sim_nodes[node_idx].logic_levels = logic_levels
+                        self.sim_nodes[node_idx].logic_levels = logic_levels;
+
+                        let affecting_gate_idx = self.gate_idxs_by_node_idx[node_idx];
+
+                        pq.push(QueueEvent(
+                            curr_subtick,
+                            QueueEventType::UpdateGate(affecting_gate_idx),
+                        ));
                     }
                 }
             }
@@ -453,7 +505,7 @@ fn main() {
     let input = LogicGate {
         gate_type: LogicGateType::Input {
             bit_width: 1,
-            logic_levels: vec![LogicLevel::High],
+            logic_levels: LogicLevels::filled(1, LogicLevel::Low),
         },
         pos: Vec2i(0, 0),
     };
@@ -469,7 +521,7 @@ fn main() {
     let output = LogicGate {
         gate_type: LogicGateType::Output {
             bit_width: 1,
-            logic_levels: vec![LogicLevel::Invalid],
+            logic_levels: LogicLevels::filled(1, LogicLevel::Invalid),
         },
         pos: Vec2i(10, 0),
     };
