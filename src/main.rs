@@ -1,34 +1,14 @@
-use core::num;
 use std::{
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::{BinaryHeap, HashMap},
     ops::{Add, Index, Not, Sub},
     rc::Rc,
 };
 
 use crate::dsu::Dsu;
+use crate::vec2i::Vec2i;
 
 mod dsu;
-
-// --- Vec2i
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Vec2i(i32, i32);
-
-impl Add for Vec2i {
-    type Output = Vec2i;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Vec2i(self.0 + rhs.0, self.1 + rhs.1)
-    }
-}
-
-impl Sub for Vec2i {
-    type Output = Vec2i;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        Vec2i(self.0 - rhs.0, self.1 - rhs.1)
-    }
-}
+mod vec2i;
 
 // ---
 
