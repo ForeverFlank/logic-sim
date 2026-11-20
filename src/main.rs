@@ -5,6 +5,8 @@ use std::{
     rc::Rc,
 };
 
+use egui::{Pos2, Rect, Shape, Vec2};
+
 use crate::dsu::Dsu;
 use crate::vec2i::Vec2i;
 
@@ -619,93 +621,210 @@ impl<'a> Sim<'a> {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut circuit = Circuit::new();
+fn main() -> eframe::Result {
+    env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
 
-    let input_1 = LogicGate {
-        gate_type: LogicGateType::Input {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_maximized(true),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "My egui App",
+        options,
+        Box::new(|cc| {
+            // This gives us image support:
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+
+            Ok(Box::<MyApp>::default())
+        }),
+    )
+}
+
+struct MyApp {
+    name: String,
+    age: u32,
+    circuit: Circuit,
+    scene_rect: Rect,
+}
+
+impl Default for MyApp {
+    fn default() -> Self {
+        let mut circuit = Circuit::new();
+
+        let input_1 = LogicGate {
+            gate_type: LogicGateType::Input {
+                bit_width: 1,
+                logic_levels: LogicLevels::filled(1, LogicLevel::High),
+            },
+            pos: Vec2i(0, 1),
+        };
+
+        let input_2 = LogicGate {
+            gate_type: LogicGateType::Input {
+                bit_width: 1,
+                logic_levels: LogicLevels::filled(1, LogicLevel::Low),
+            },
+            pos: Vec2i(0, -1),
+        };
+
+        let not = LogicGate {
+            gate_type: LogicGateType::Not {
+                bit_width: 1,
+                propagation_delay: 1,
+            },
+            pos: Vec2i(4, -1),
+        };
+
+        let and = LogicGate {
+            gate_type: LogicGateType::And {
+                bit_width: 1,
+                num_inputs: 2,
+                propagation_delay: 1,
+            },
+            pos: Vec2i(7, 0),
+        };
+
+        let output = LogicGate {
+            gate_type: LogicGateType::Output {
+                bit_width: 1,
+                logic_levels: LogicLevels::filled(1, LogicLevel::Invalid),
+            },
+            pos: Vec2i(10, 0),
+        };
+
+        let w_1 = Wire {
+            pos1: Vec2i(1, 1),
+            pos2: Vec2i(6, 1),
             bit_width: 1,
-            logic_levels: LogicLevels::filled(1, LogicLevel::High),
-        },
-        pos: Vec2i(0, 1),
-    };
+        };
 
-    let input_2 = LogicGate {
-        gate_type: LogicGateType::Input {
+        let w_2 = Wire {
+            pos1: Vec2i(1, -1),
+            pos2: Vec2i(3, -1),
             bit_width: 1,
-            logic_levels: LogicLevels::filled(1, LogicLevel::Low),
-        },
-        pos: Vec2i(0, -1),
-    };
+        };
 
-    let not = LogicGate {
-        gate_type: LogicGateType::Not {
+        let w_3 = Wire {
+            pos1: Vec2i(5, -1),
+            pos2: Vec2i(6, -1),
             bit_width: 1,
-            propagation_delay: 1,
-        },
-        pos: Vec2i(4, -1),
-    };
+        };
 
-    let and = LogicGate {
-        gate_type: LogicGateType::And {
+        let w_4 = Wire {
+            pos1: Vec2i(8, 0),
+            pos2: Vec2i(9, 0),
             bit_width: 1,
-            num_inputs: 2,
-            propagation_delay: 1,
-        },
-        pos: Vec2i(7, 0),
-    };
+        };
 
-    let output = LogicGate {
-        gate_type: LogicGateType::Output {
-            bit_width: 1,
-            logic_levels: LogicLevels::filled(1, LogicLevel::Invalid),
-        },
-        pos: Vec2i(10, 0),
-    };
+        circuit.gates.push(input_1);
+        circuit.gates.push(input_2);
+        circuit.gates.push(not);
+        circuit.gates.push(and);
+        circuit.gates.push(output);
 
-    let w_1 = Wire {
-        pos1: Vec2i(1, 1),
-        pos2: Vec2i(6, 1),
-        bit_width: 1,
-    };
+        circuit.wires.push(w_1);
+        circuit.wires.push(w_2);
+        circuit.wires.push(w_3);
+        circuit.wires.push(w_4);
 
-    let w_2 = Wire {
-        pos1: Vec2i(1, -1),
-        pos2: Vec2i(3, -1),
-        bit_width: 1,
-    };
+        let mut sim = Sim::new(&circuit).unwrap();
 
-    let w_3 = Wire {
-        pos1: Vec2i(5, -1),
-        pos2: Vec2i(6, -1),
-        bit_width: 1,
-    };
+        sim.tick();
 
-    let w_4 = Wire {
-        pos1: Vec2i(8, 0),
-        pos2: Vec2i(9, 0),
-        bit_width: 1,
-    };
+        println!();
+        for sim_node in sim.sim_nodes {
+            println!("{:?}", sim_node);
+        }
 
-    circuit.gates.push(input_1);
-    circuit.gates.push(input_2);
-    circuit.gates.push(not);
-    circuit.gates.push(and);
-    circuit.gates.push(output);
-
-    circuit.wires.push(w_1);
-    circuit.wires.push(w_2);
-    circuit.wires.push(w_3);
-    circuit.wires.push(w_4);
-
-    let mut sim = Sim::new(&circuit)?;
-
-    sim.tick();
-
-    println!();
-    for sim_node in sim.sim_nodes {
-        println!("{:?}", sim_node);
+        Self {
+            name: "Arthur".to_owned(),
+            age: 42,
+            circuit,
+            scene_rect: Rect::ZERO,
+        }
     }
+}
 
-    Ok(())
+impl eframe::App for MyApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ui, |ui| {
+            let ui_rect = ui.content_rect();
+            let ui_size = ui_rect.size();
+
+            ui.heading("My egui Application");
+
+            ui.horizontal(|ui| {
+                let name_label = ui.label("Your name: ");
+                ui.text_edit_singleline(&mut self.name)
+                    .labelled_by(name_label.id);
+            });
+
+            ui.add(egui::Slider::new(&mut self.age, 0..=120).text("age"));
+
+            if ui.button("Increment").clicked() {
+                self.age += 1;
+            }
+
+            ui.label(format!("Hello '{}', age {}", self.name, self.age));
+            ui.label(format!("{}", ui_size));
+
+            egui::Frame::group(ui.style())
+                .inner_margin(0.0)
+                .show(ui, |ui| {
+                    ui.set_height(500.);
+                    let scene = egui::Scene::new().scroll_zooms(true).zoom_range(0.1..=10.0);
+
+                    let mut inner_rect = Rect::NAN;
+
+                    let mut pointer_pos = None;
+                    let scene_rect = self.scene_rect;
+
+                    let response = scene
+                        .show(ui, &mut self.scene_rect, |ui| {
+                            let painter = egui::Painter::new(
+                                ui.ctx().clone(),
+                                ui.layer_id(),
+                                ui.available_rect_before_wrap(),
+                            );
+                            pointer_pos = if let Some(pos) = ui.pointer_latest_pos() {
+                                let t = pos.to_vec2() / ui_size;
+
+                                Some(
+                                    scene_rect.min.to_vec2() * t
+                                        + scene_rect.max.to_vec2() * (Vec2::ONE - t),
+                                )
+                            } else {
+                                None
+                            };
+
+                            let width = 0.2;
+                            let color = egui::Color32::from_rgb(255, 255, 255);
+
+                            for wire in &self.circuit.wires {
+                                painter.add(Shape::line_segment(
+                                    [
+                                        Pos2::new(
+                                            (wire.pos1.0 * 20) as f32,
+                                            (wire.pos1.1 * 20) as f32,
+                                        ),
+                                        Pos2::new(
+                                            (wire.pos2.0 * 20) as f32,
+                                            (wire.pos2.1 * 20) as f32,
+                                        ),
+                                    ],
+                                    (width, color),
+                                ));
+                            }
+                        })
+                        .response;
+
+                    ui.label(format!("{:?}", pointer_pos));
+
+                    // if reset_view || response.double_clicked() {
+                    //     self.scene_rect = inner_rect;
+                    // }
+                });
+        });
+    }
 }
