@@ -272,7 +272,7 @@ enum NodeSource<'a> {
     Wire(&'a Wire),
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct SimulationNode {
     pub logic_levels: LogicLevels,
 }
@@ -318,6 +318,7 @@ struct Simulation<'a> {
     pub node_idxs_by_gate_idx: Vec<Vec<usize>>,
     pub gate_idxs_by_node_idx: HashMap<usize, usize>,
 
+    pub sim_node_idxs_by_gate_idx: Vec<Vec<usize>>,
     pub affecting_gate_idxs_by_sim_node_idx: HashMap<usize, Vec<usize>>,
 
     pub node_sources: Vec<NodeSource<'a>>,
@@ -450,20 +451,31 @@ impl<'a> Simulation<'a> {
         }
 
         // create simulation nodes
-        let sim_nodes = all_nodes
-            .iter()
-            .map(|node| SimulationNode::new(node.bit_width))
+        let sim_nodes = (0..sim_node_idx_counter)
+            .map(|node| SimulationNode::new(1))
             .collect::<Vec<_>>();
 
         // todo!();
+        let sim_node_idxs_by_gate_idx = node_idxs_by_gate_idx
+            .iter()
+            .map(|node_idxs| {
+                node_idxs
+                    .iter()
+                    .map(|node_idx| sim_node_idxs_by_node_idx[*node_idx])
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
 
         // create the struct
         Simulation {
             circuit,
             sim_nodes,
             input_gate_idxs,
+
             node_idxs_by_gate_idx,
             gate_idxs_by_node_idx,
+
+            sim_node_idxs_by_gate_idx,
             affecting_gate_idxs_by_sim_node_idx,
             // input_sim_node_ids,
             node_sources,
@@ -512,17 +524,13 @@ impl<'a> Simulation<'a> {
                     QueueEventType::UpdateGate(gate_idx) => {
                         let gate = &self.circuit.gates[gate_idx];
 
-                        let node_idxs = &self.node_idxs_by_gate_idx[gate_idx];
-                        gate.process(node_idxs, &self.sim_nodes, &mut pq, curr_subtick);
-
-                        // gate.process(nodes) -- update the nodes, e.g. change outputs given inputs
-                        // then find what nodes have changed its states
-                        // then find what gates got affected by said changed nodes
-                        // then add all of those gates to the heap
+                        let sim_node_idxs = &self.sim_node_idxs_by_gate_idx[gate_idx];
+                        // let sim_node_idxs = &self.node_idxs_by_gate_idx[gate_idx];
+                        gate.process(sim_node_idxs, &self.sim_nodes, &mut pq, curr_subtick);
                     }
 
                     QueueEventType::UpdateNode(sim_node_idx, logic_levels) => {
-                        self.sim_nodes[sim_node_idx as usize].logic_levels = logic_levels;
+                        self.sim_nodes[sim_node_idx].logic_levels = logic_levels;
 
                         let affecting_gate_idxs =
                             self.affecting_gate_idxs_by_sim_node_idx.get(&sim_node_idx);
@@ -591,4 +599,9 @@ fn main() {
     let mut sim = Simulation::new(&circuit);
 
     sim.tick();
+
+    println!();
+    for sim_node in sim.sim_nodes {
+        println!("{:?}", sim_node);
+    }
 }
