@@ -11,7 +11,7 @@ mod dsu;
 
 // --- Vec2i
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Vec2i(i32, i32);
 
 impl Add for Vec2i {
@@ -79,7 +79,7 @@ impl Not for LogicLevels {
 
 // --- logic gates
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum LogicGateType {
     Circuit(Rc<Circuit>),
     Input {
@@ -116,6 +116,7 @@ impl LogicGateType {
     }
 }
 
+#[derive(Debug)]
 struct LogicGate {
     pub gate_type: LogicGateType,
     pub pos: Vec2i,
@@ -147,7 +148,7 @@ impl LogicGate {
         }
     }
 
-    pub fn tick(
+    pub fn process(
         &self,
         node_idxs: &[usize],
         sim_nodes: &[SimulationNode],
@@ -191,7 +192,7 @@ impl LogicGate {
 
 // ---
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct Wire {
     pub pos1: Vec2i,
     pub pos2: Vec2i,
@@ -207,6 +208,7 @@ impl Wire {
     }
 }
 
+#[derive(Debug)]
 struct Circuit {
     pub gates: Vec<LogicGate>,
     pub wires: Vec<Wire>,
@@ -333,6 +335,9 @@ impl<'a> Simulation<'a> {
         let mut node_idxs_by_gate_idx = Vec::new();
         let mut gate_idxs_by_node_idx = HashMap::new();
 
+        let mut gate_idxs_by_in_node_idx = HashMap::new();
+        let mut gate_idxs_by_out_node_idx = HashMap::new();
+
         let mut input_gate_idxs = Vec::new();
 
         // create nodes from logic gates
@@ -345,10 +350,22 @@ impl<'a> Simulation<'a> {
                 node_idx_counter += 1;
 
                 dsu.make_set(node_idx);
-                all_nodes.push(node);
+                all_nodes.push(node.clone());
                 node_sources.push(NodeSource::LogicGate(&gate));
 
                 gate_idxs_by_node_idx.insert(node_idx, gate_idx);
+
+                if matches!(node.node_type, NodeType::In)
+                    || matches!(node.node_type, NodeType::InOut)
+                {
+                    gate_idxs_by_in_node_idx.insert(node_idx, gate_idx);
+                }
+
+                if matches!(node.node_type, NodeType::Out)
+                    || matches!(node.node_type, NodeType::InOut)
+                {
+                    gate_idxs_by_out_node_idx.insert(node_idx, gate_idx);
+                }
 
                 ids.push(node_idx);
             }
@@ -405,6 +422,26 @@ impl<'a> Simulation<'a> {
             });
 
             sim_node_idxs_by_node_idx.push(sim_node_idx.clone());
+        }
+
+        println!("gate idx -> gate");
+        for i in 0..gates.len() {
+            println!("{} -> {:?}", i, gates[i]);
+        }
+
+        println!("gate idx -> [node idx]");
+        for i in 0..node_idxs_by_gate_idx.len() {
+            println!("{} -> {:?}", i, node_idxs_by_gate_idx[i]);
+        }
+
+        println!("node idx -> gate idx");
+        for i in 0..gate_idxs_by_node_idx.len() {
+            println!("{} -> {}", i, gate_idxs_by_node_idx[&i]);
+        }
+
+        println!("node idx -> affecting gate idx");
+        for k in gate_idxs_by_in_node_idx.keys() {
+            println!("{} -> {:?}", k, gate_idxs_by_in_node_idx[k]);
         }
 
         println!("node idx -> sim node idx");
@@ -475,7 +512,7 @@ impl<'a> Simulation<'a> {
                         let gate = &self.circuit.gates[gate_idx];
 
                         let node_idxs = &self.node_idxs_by_gate_idx[gate_idx];
-                        gate.tick(node_idxs, &self.sim_nodes, &mut pq, curr_subtick);
+                        gate.process(node_idxs, &self.sim_nodes, &mut pq, curr_subtick);
 
                         // gate.process(nodes) -- update the nodes, e.g. change outputs given inputs
                         // then find what nodes have changed its states
@@ -546,16 +583,6 @@ fn main() {
     circuit.wires.push(w2);
 
     let mut sim = Simulation::new(&circuit);
-
-    println!("gate idx -> [node idx]");
-    for i in 0..sim.node_idxs_by_gate_idx.len() {
-        println!("{} -> {:?}", i, sim.node_idxs_by_gate_idx[i]);
-    }
-
-    println!("node idx -> gate idx");
-    for i in 0..sim.gate_idxs_by_node_idx.len() {
-        println!("{} -> {}", i, sim.gate_idxs_by_node_idx[i]);
-    }
 
     sim.tick();
 }
