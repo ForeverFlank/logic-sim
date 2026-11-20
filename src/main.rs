@@ -62,10 +62,10 @@ impl LogicLevels {
     }
 }
 
-impl Index<usize> for LogicLevels {
+impl Index<i32> for LogicLevels {
     type Output = LogicLevel;
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.0[index]
+    fn index(&self, index: i32) -> &Self::Output {
+        &self.0[index as usize]
     }
 }
 
@@ -182,7 +182,7 @@ impl LogicGate {
                     subtick + propagation_delay,
                     QueueEventType::UpdateNode(
                         node_idxs[1],
-                        !sim_nodes[node_idxs[0]].logic_levels.clone(),
+                        !sim_nodes[node_idxs[0] as usize].logic_levels.clone(),
                     ),
                 ));
             }
@@ -316,7 +316,9 @@ struct Simulation<'a> {
     pub input_gate_idxs: Vec<usize>,
 
     pub node_idxs_by_gate_idx: Vec<Vec<usize>>,
-    pub gate_idxs_by_node_idx: Vec<usize>,
+    pub gate_idxs_by_node_idx: HashMap<usize, usize>,
+
+    pub affecting_gate_idxs_by_sim_node_idx: HashMap<usize, Vec<usize>>,
 
     pub node_sources: Vec<NodeSource<'a>>,
 }
@@ -329,14 +331,12 @@ impl<'a> Simulation<'a> {
         let mut dsu = Dsu::<usize>::new();
         let mut node_idx_counter = 0;
         let mut all_nodes = Vec::<Node>::new();
+        let mut gate_nodes = Vec::<Node>::new();
 
         let mut node_sources = Vec::new();
 
         let mut node_idxs_by_gate_idx = Vec::new();
         let mut gate_idxs_by_node_idx = HashMap::new();
-
-        let mut gate_idxs_by_in_node_idx = HashMap::new();
-        let mut gate_idxs_by_out_node_idx = HashMap::new();
 
         let mut input_gate_idxs = Vec::new();
 
@@ -350,22 +350,11 @@ impl<'a> Simulation<'a> {
                 node_idx_counter += 1;
 
                 dsu.make_set(node_idx);
+                gate_nodes.push(node.clone());
                 all_nodes.push(node.clone());
                 node_sources.push(NodeSource::LogicGate(&gate));
 
                 gate_idxs_by_node_idx.insert(node_idx, gate_idx);
-
-                if matches!(node.node_type, NodeType::In)
-                    || matches!(node.node_type, NodeType::InOut)
-                {
-                    gate_idxs_by_in_node_idx.insert(node_idx, gate_idx);
-                }
-
-                if matches!(node.node_type, NodeType::Out)
-                    || matches!(node.node_type, NodeType::InOut)
-                {
-                    gate_idxs_by_out_node_idx.insert(node_idx, gate_idx);
-                }
 
                 ids.push(node_idx);
             }
@@ -402,7 +391,7 @@ impl<'a> Simulation<'a> {
         // connect two nodes together if they share the same position
         for i in 0..all_nodes.len() {
             for j in 0..i {
-                if all_nodes[i].pos == all_nodes[j].pos {
+                if all_nodes[i as usize].pos == all_nodes[j as usize].pos {
                     dsu.union(i, j);
                 }
             }
@@ -410,7 +399,7 @@ impl<'a> Simulation<'a> {
 
         let mut sim_node_idxs_by_root = HashMap::new();
         let mut sim_node_idxs_by_node_idx = Vec::new();
-        let mut sim_node_idx_counter = 0;
+        let mut sim_node_idx_counter = 0usize;
 
         for node_idx in 0..node_idx_counter {
             let root = dsu.find(node_idx);
@@ -422,6 +411,22 @@ impl<'a> Simulation<'a> {
             });
 
             sim_node_idxs_by_node_idx.push(sim_node_idx.clone());
+        }
+
+        let mut affecting_gate_idxs_by_sim_node_idx = HashMap::new();
+
+        for (node_idx, gate_idx) in &gate_idxs_by_node_idx {
+            let node = &gate_nodes[*node_idx];
+            let sim_node_idx = sim_node_idxs_by_node_idx[*node_idx];
+
+            match node.node_type {
+                NodeType::In | NodeType::InOut => affecting_gate_idxs_by_sim_node_idx
+                    .entry(sim_node_idx)
+                    .or_insert(Vec::new())
+                    .push(*gate_idx),
+
+                NodeType::Out => (),
+            }
         }
 
         println!("gate idx -> gate");
@@ -439,14 +444,9 @@ impl<'a> Simulation<'a> {
             println!("{} -> {}", i, gate_idxs_by_node_idx[&i]);
         }
 
-        println!("node idx -> affecting gate idx");
-        for k in gate_idxs_by_in_node_idx.keys() {
-            println!("{} -> {:?}", k, gate_idxs_by_in_node_idx[k]);
-        }
-
         println!("node idx -> sim node idx");
         for i in 0..node_idx_counter {
-            println!("{} -> {}", i, sim_node_idxs_by_node_idx[i]);
+            println!("{} -> {}", i, sim_node_idxs_by_node_idx[i as usize]);
         }
 
         // create simulation nodes
@@ -455,18 +455,19 @@ impl<'a> Simulation<'a> {
             .map(|node| SimulationNode::new(node.bit_width))
             .collect::<Vec<_>>();
 
-        todo!();
+        // todo!();
 
         // create the struct
-        // Simulation {
-        //     circuit,
-        //     sim_nodes,
-        //     input_gate_idxs,
-        //     node_idxs_by_gate_idx,
-        //     gate_idxs_by_node_idx,
-        //     // input_sim_node_ids,
-        //     node_sources,
-        // }
+        Simulation {
+            circuit,
+            sim_nodes,
+            input_gate_idxs,
+            node_idxs_by_gate_idx,
+            gate_idxs_by_node_idx,
+            affecting_gate_idxs_by_sim_node_idx,
+            // input_sim_node_ids,
+            node_sources,
+        }
     }
 
     pub fn tick(&mut self) {
@@ -520,15 +521,20 @@ impl<'a> Simulation<'a> {
                         // then add all of those gates to the heap
                     }
 
-                    QueueEventType::UpdateNode(node_idx, logic_levels) => {
-                        self.sim_nodes[node_idx].logic_levels = logic_levels;
+                    QueueEventType::UpdateNode(sim_node_idx, logic_levels) => {
+                        self.sim_nodes[sim_node_idx as usize].logic_levels = logic_levels;
 
-                        let affecting_gate_idx = self.gate_idxs_by_node_idx[node_idx];
+                        let affecting_gate_idxs =
+                            self.affecting_gate_idxs_by_sim_node_idx.get(&sim_node_idx);
 
-                        pq.push(QueueEvent(
-                            curr_subtick,
-                            QueueEventType::UpdateGate(affecting_gate_idx),
-                        ));
+                        if let Some(gate_idxs) = affecting_gate_idxs {
+                            for gate_idx in gate_idxs {
+                                pq.push(QueueEvent(
+                                    curr_subtick,
+                                    QueueEventType::UpdateGate(*gate_idx),
+                                ));
+                            }
+                        }
                     }
                 }
             }
