@@ -160,32 +160,13 @@ impl LogicGate {
                 bit_width,
                 num_inputs,
                 ..
-            } => {
-                let mut nodes = if num_inputs % 2 == 0 {
-                    let half = num_inputs / 2;
+            } => Self::create_and_or_gate_nodes(self.pos, bit_width, num_inputs),
 
-                    (0..half)
-                        .flat_map(|i| {
-                            [
-                                Node::new_in(self.pos + Vec2i(-1, 1 + i), bit_width),
-                                Node::new_in(self.pos + Vec2i(-1, -1 - i), bit_width),
-                            ]
-                        })
-                        .collect::<Vec<_>>()
-                } else {
-                    let floored_half = num_inputs / 2;
-
-                    (-floored_half..(floored_half + 1))
-                        .map(|i| Node::new_in(self.pos + Vec2i(-1, i), bit_width))
-                        .collect::<Vec<_>>()
-                };
-
-                nodes.push(Node::new_out(self.pos + Vec2i(1, 0), bit_width));
-
-                nodes
-            }
-
-            LogicGateType::Or { .. } => todo!(),
+            LogicGateType::Or {
+                bit_width,
+                num_inputs,
+                ..
+            } => Self::create_and_or_gate_nodes(self.pos, bit_width, num_inputs),
 
             LogicGateType::Not { bit_width, .. } => {
                 vec![
@@ -196,18 +177,43 @@ impl LogicGate {
         }
     }
 
+    fn create_and_or_gate_nodes(pos: Vec2i, bit_width: i32, num_inputs: i32) -> Vec<Node> {
+        let mut nodes = if num_inputs % 2 == 0 {
+            let half = num_inputs / 2;
+
+            (0..half)
+                .flat_map(|i| {
+                    [
+                        Node::new_in(pos + Vec2i(-1, 1 + i), bit_width),
+                        Node::new_in(pos + Vec2i(-1, -1 - i), bit_width),
+                    ]
+                })
+                .collect::<Vec<_>>()
+        } else {
+            let floored_half = num_inputs / 2;
+
+            (-floored_half..(floored_half + 1))
+                .map(|i| Node::new_in(pos + Vec2i(-1, i), bit_width))
+                .collect::<Vec<_>>()
+        };
+
+        nodes.push(Node::new_out(pos + Vec2i(1, 0), bit_width));
+
+        nodes
+    }
+
     pub fn process(
         &self,
         node_idxs: &[usize],
         sim_nodes: &[SimNode],
-        pq: &mut SimQueue,
+        sim_queue: &mut SimQueue,
         subtick: i32,
     ) {
         match &self.gate_type {
             LogicGateType::Circuit(_circuit) => todo!(),
 
             LogicGateType::Input { logic_levels, .. } => {
-                pq.push(QueueEvent(
+                sim_queue.push(QueueEvent(
                     subtick,
                     QueueEventType::UpdateNode(node_idxs[0], logic_levels.clone()),
                 ));
@@ -229,18 +235,33 @@ impl LogicGate {
                     .reduce(|acc, logic_level| acc & logic_level)
                     .unwrap();
 
-                pq.push(QueueEvent(
+                sim_queue.push(QueueEvent(
                     subtick + propagation_delay,
                     QueueEventType::UpdateNode(*node_idxs.last().unwrap(), res.clone()),
                 ));
             }
 
-            LogicGateType::Or { .. } => todo!(),
+            LogicGateType::Or {
+                num_inputs,
+                propagation_delay,
+                ..
+            } => {
+                let res = &node_idxs[0..*num_inputs as usize]
+                    .iter()
+                    .map(|idx| sim_nodes[*idx].logic_levels.clone())
+                    .reduce(|acc, logic_level| acc | logic_level)
+                    .unwrap();
+
+                sim_queue.push(QueueEvent(
+                    subtick + propagation_delay,
+                    QueueEventType::UpdateNode(*node_idxs.last().unwrap(), res.clone()),
+                ));
+            }
 
             LogicGateType::Not {
                 propagation_delay, ..
             } => {
-                pq.push(QueueEvent(
+                sim_queue.push(QueueEvent(
                     subtick + propagation_delay,
                     QueueEventType::UpdateNode(
                         node_idxs[1],
@@ -536,27 +557,27 @@ impl<'a> Sim<'a> {
 
     pub fn tick(&mut self) {
         // a priority queue of (subtick, update event)
-        let mut pq = SimQueue::new();
+        let mut sim_queue = SimQueue::new();
 
         // push all input gates into the queue
         for gate_idx in &self.input_gate_idxs {
-            pq.push(QueueEvent(0, QueueEventType::UpdateGate(*gate_idx)));
+            sim_queue.push(QueueEvent(0, QueueEventType::UpdateGate(*gate_idx)));
         }
 
-        // loop while there is something in the queue to proceed
-        const MAX_ITERS: i32 = 10;
+        const MAX_ITERS: i32 = 100;
         let mut iter = 0;
 
-        while !pq.is_empty() && iter < MAX_ITERS {
+        // loop while there is something in the queue to proceed
+        while !sim_queue.is_empty() && iter < MAX_ITERS {
             iter += 1;
 
-            let curr_subtick = pq.peek().unwrap().0;
+            let curr_subtick = sim_queue.peek().unwrap().0;
 
             // retrieve all to-be-processed queue items
             let mut to_update = Vec::new();
 
-            while pq.peek().is_some_and(|item| item.0 == curr_subtick) {
-                to_update.push(pq.pop().unwrap().1);
+            while sim_queue.peek().is_some_and(|item| item.0 == curr_subtick) {
+                to_update.push(sim_queue.pop().unwrap().1);
             }
 
             println!("subtick {}", curr_subtick);
@@ -572,7 +593,7 @@ impl<'a> Sim<'a> {
 
                         let sim_node_idxs = &self.sim_node_idxs_by_gate_idx[gate_idx];
                         // let sim_node_idxs = &self.node_idxs_by_gate_idx[gate_idx];
-                        gate.process(sim_node_idxs, &self.sim_nodes, &mut pq, curr_subtick);
+                        gate.process(sim_node_idxs, &self.sim_nodes, &mut sim_queue, curr_subtick);
                     }
 
                     QueueEventType::UpdateNode(sim_node_idx, logic_levels) => {
@@ -581,13 +602,15 @@ impl<'a> Sim<'a> {
                         let affecting_gate_idxs =
                             self.affecting_gate_idxs_by_sim_node_idx.get(&sim_node_idx);
 
-                        if let Some(gate_idxs) = affecting_gate_idxs {
-                            for gate_idx in gate_idxs {
-                                pq.push(QueueEvent(
-                                    curr_subtick,
-                                    QueueEventType::UpdateGate(*gate_idx),
-                                ));
-                            }
+                        let Some(gate_idxs) = affecting_gate_idxs else {
+                            continue;
+                        };
+
+                        for gate_idx in gate_idxs {
+                            sim_queue.push(QueueEvent(
+                                curr_subtick,
+                                QueueEventType::UpdateGate(*gate_idx),
+                            ));
                         }
                     }
                 }
